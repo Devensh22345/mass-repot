@@ -25,6 +25,6 @@ class Config:
     MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://mass:mass@cluster0.4nrgvz8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
     MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "Test")
     # Log Channel (Add your log channel ID here)
-    LOG_CHANNEL = int(os.getenv("LOG_CHANNEL", "-1002372592189"))  # Default is a placeholder
+    LOG_CHANNEL = int(os.getenv("LOG_CHANNEL", "-1002820705251"))  # Default is a placeholder
 
 cfg = Config()
