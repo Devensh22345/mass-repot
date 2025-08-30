@@ -1,18 +1,13 @@
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.raw import functions, types
 import asyncio, random
 from configs import cfg
 
-# === Initialize Bot Client ===
-app = Client(
-    "bot",
-    api_id=cfg.API_ID,
-    api_hash=cfg.API_HASH,
-    bot_token=cfg.BOT_TOKEN
-)
+# Bot client
+app = Client("bot", api_id=cfg.API_ID, api_hash=cfg.API_HASH, bot_token=cfg.BOT_TOKEN)
 
-# === Initialize Session Clients ===
+# User sessions
 session_clients = {}
 for i in range(1, 31):
     session_key = f"session{i}"
@@ -25,23 +20,8 @@ for i in range(1, 31):
             session_string=session_string
         )
 
-# Start all session clients
-for client in session_clients.values():
-    client.start()
-
-# === Config ===
-LOG_CHANNEL = -1002820705251
-report_state = {}
-
-REPORT_REASONS = {
-    "spam": types.InputReportReasonSpam(),
-    "violence": types.InputReportReasonViolence(),
-    "porn": types.InputReportReasonPornography(),
-    "child": types.InputReportReasonChildAbuse(),
-    "copyright": types.InputReportReasonCopyright(),
-    "other": types.InputReportReasonOther()
-}
-
+LOG_CHANNEL = cfg.LOG_CHANNEL
+report_data = {}  # store per-user reporting state
 
 async def log_to_channel(text: str):
     try:
@@ -49,119 +29,135 @@ async def log_to_channel(text: str):
     except Exception as e:
         print(f"Log failed: {e}")
 
-
-# === Start Message ===
 @app.on_message(filters.command("start"))
 async def start_message(client: Client, message: Message):
-    await message.reply_text(
-        "👋 Hello!\n\n"
+    txt = (
+        "👋 Hello! I can mass-report Telegram channels, groups, or bots.\n\n"
         "Commands:\n"
-        "/report → Start reporting flow"
+        "• /report → Start reporting flow\n"
+        "• /stopreport → Cancel current reporting task\n\n"
+        "⚠️ Only SUDO users can use this bot."
     )
-    await log_to_channel(f"👋 Bot started by {message.from_user.mention} (ID: {message.from_user.id})")
+    await message.reply_text(txt)
+    await log_to_channel(f"✅ Bot started by {message.from_user.mention} (ID: {message.from_user.id})")
 
-
-# === Report Flow ===
+# Step 1: /report
 @app.on_message(filters.command("report"))
-async def report_command(client: Client, message: Message):
-    user_id = message.from_user.id
-    report_state[user_id] = {"step": "ask_target"}
-    await message.reply_text("🔎 Send the @username or channel/group ID to report.")
-
-
-@app.on_message(filters.text & ~filters.command(["start", "report"]))
-async def handle_report_steps(client: Client, message: Message):
-    user_id = message.from_user.id
-    if user_id not in report_state:
+async def report_command(client, message: Message):
+    if message.from_user.id not in cfg.SUDO:
+        await message.reply_text("❌ Only sudo users can use this command.")
         return
 
-    state = report_state[user_id]
+    report_data[message.from_user.id] = {}
+    await message.reply_text("✍️ Send the username or ID of the target channel/group/bot (example: @badchannel):")
+    report_data[message.from_user.id]["step"] = "username"
 
-    # Step 1: Target username/ID
-    if state["step"] == "ask_target":
-        state["target"] = message.text.strip()
-        state["step"] = "ask_count"
-        await message.reply_text("📊 How many reports per session account?")
+# Handle text replies in flow
+@app.on_message(filters.text & ~filters.command(["report", "start", "stopreport"]))
+async def handle_text_reply(client: Client, message: Message):
+    user_id = message.from_user.id
+    if user_id not in report_data or "step" not in report_data[user_id]:
         return
 
-    # Step 2: Count
-    if state["step"] == "ask_count":
+    step = report_data[user_id]["step"]
+
+    # Step: username
+    if step == "username":
+        report_data[user_id]["username"] = message.text.strip()
+        report_data[user_id]["step"] = "count"
+        await message.reply_text("🔢 How many reports to send from each session?")
+        return
+
+    # Step: count
+    if step == "count":
         try:
             count = int(message.text.strip())
+            report_data[user_id]["count"] = count
+            report_data[user_id]["step"] = "reason"
+            buttons = [
+                [InlineKeyboardButton("🚫 Spam", callback_data="reason_spam")],
+                [InlineKeyboardButton("👶 Child Abuse", callback_data="reason_child")],
+                [InlineKeyboardButton("🔪 Violence", callback_data="reason_violence")],
+                [InlineKeyboardButton("🔞 Pornography", callback_data="reason_porn")],
+                [InlineKeyboardButton("💿 Copyright", callback_data="reason_copyright")],
+                [InlineKeyboardButton("❔ Other", callback_data="reason_other")]
+            ]
+            await message.reply_text("⚠️ Select report reason:", reply_markup=InlineKeyboardMarkup(buttons))
         except:
-            await message.reply_text("❌ Please send a valid number.")
-            return
-        state["count"] = count
-        state["step"] = "ask_reason"
-        await message.reply_text(
-            "⚠️ Choose report type:\n"
-            "spam | violence | porn | child | copyright | other"
-        )
+            await message.reply_text("❌ Invalid number. Send an integer.")
         return
 
-    # Step 3: Reason
-    if state["step"] == "ask_reason":
-        reason = message.text.lower().strip()
-        if reason not in REPORT_REASONS:
-            await message.reply_text("❌ Invalid reason. Choose from: spam, violence, porn, child, copyright, other")
-            return
-        state["reason"] = reason
-        state["step"] = "ask_description"
-        await message.reply_text("📝 Send report description (e.g., 'This channel spreads spam').")
+    # Step: description
+    if step == "description":
+        report_data[user_id]["description"] = message.text.strip()
+        await message.reply_text("🚀 Starting mass-reporting...")
+        await start_reporting(user_id, message)
+        report_data.pop(user_id, None)
+
+# Handle reason selection
+@app.on_callback_query(filters.regex(r"^reason_"))
+async def handle_reason_callback(client: Client, cq: CallbackQuery):
+    user_id = cq.from_user.id
+    if user_id not in report_data:
+        await cq.answer("❌ No active report.", show_alert=True)
         return
 
-    # Step 4: Description
-    if state["step"] == "ask_description":
-        state["description"] = message.text.strip()
-        await message.reply_text("✅ Starting reporting process...")
-        await start_reporting(user_id)
-        del report_state[user_id]
+    reason = cq.data.replace("reason_", "")
+    report_data[user_id]["reason"] = reason
+    report_data[user_id]["step"] = "description"
+    await cq.message.reply_text("✍️ Send a short description for this report:")
 
+# Start reporting process
+async def start_reporting(user_id, message: Message):
+    data = report_data[user_id]
+    target = data["username"]
+    reason = data["reason"]
+    count = data["count"]
+    description = data["description"]
 
-async def start_reporting(user_id: int):
-    state = report_state[user_id]
-    target = state["target"]
-    count = state["count"]
-    reason = REPORT_REASONS[state["reason"]]
-    description = state["description"]
+    reason_map = {
+        "spam": types.InputReportReasonSpam(),
+        "child": types.InputReportReasonChildAbuse(),
+        "violence": types.InputReportReasonViolence(),
+        "porn": types.InputReportReasonPornography(),
+        "copyright": types.InputReportReasonCopyright(),
+        "other": types.InputReportReasonOther()
+    }
+    reason_obj = reason_map.get(reason, types.InputReportReasonSpam())
 
-    for session_key, session_client in session_clients.items():
+    await log_to_channel(f"🚨 Mass report started by {message.from_user.mention}\n"
+                         f"Target: {target}\nReason: {reason}\nReports per session: {count}")
+
+    for session_key, sc in session_clients.items():
         try:
-            # Resolve chat
-            if target.startswith("@"):
-                chat = await session_client.get_chat(target)
-            else:
-                chat = await session_client.get_chat(int(target))
-
-            # Try to join (channels/groups only)
-            try:
-                await session_client.join_chat(chat.id)
-                await log_to_channel(f"👤 {session_key} joined {target}")
-            except Exception:
-                pass
-
-            peer = await session_client.resolve_peer(chat.id)
-
-            for i in range(count):
-                try:
-                    await session_client.invoke(
-                        functions.account.ReportPeer(
-                            peer=peer,
-                            reason=reason,
-                            message=description
-                        )
-                    )
-                    await log_to_channel(f"✅ {session_key} reported {target} ({state['reason']}) [{i+1}/{count}]")
-                    await asyncio.sleep(random.randint(5, 15))  # delay to mimic real
-                except Exception as e:
-                    await log_to_channel(f"❌ {session_key} failed report {target}: {e}")
-                    break
-
+            await sc.join_chat(target)  # join channel/group first
         except Exception as e:
-            await log_to_channel(f"❌ {session_key} could not process {target}: {e}")
+            await log_to_channel(f"⚠️ {session_key} failed to join {target}: {e}")
 
-    await log_to_channel(f"🏁 Reporting finished for {target}")
+        try:
+            chat = await sc.get_chat(target)
+            peer = await sc.resolve_peer(chat.id)
+        except Exception as e:
+            await log_to_channel(f"❌ {session_key} failed to resolve {target}: {e}")
+            continue
 
+        for i in range(count):
+            try:
+                await sc.invoke(functions.account.ReportPeer(
+                    peer=peer,
+                    reason=reason_obj,
+                    message=description
+                ))
+                await log_to_channel(f"✅ {session_key} → Report {i+1}/{count} sent for {target}")
+                await asyncio.sleep(random.randint(5, 15))  # small delay
+            except Exception as e:
+                await log_to_channel(f"❌ {session_key} report failed: {e}")
+                await asyncio.sleep(3)
 
-# === Run Bot ===
+    await log_to_channel(f"🛑 Mass report completed for {target}")
+
+# Start all session clients
+for client in session_clients.values():
+    client.start()
+
 app.run()
