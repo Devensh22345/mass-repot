@@ -5,10 +5,9 @@ from database import add_created_channel
 import random
 import string
 import asyncio
-import time
 import pyrogram.utils
-from pyrogram.errors import FloodWait, UsernameOccupied
-import os
+from pyrogram.errors import FloodWait
+from pyrogram.raw import functions, types
 
 pyrogram.utils.MIN_CHANNEL_ID = -1009147483647
 
@@ -22,7 +21,6 @@ app = Client(
 
 # Dictionary to hold multiple user session clients
 session_clients = {}
-
 for i in range(1, 31):
     session_key = f"session{i}"
     session_string = getattr(cfg, f"SESSION_STRING_{i}", None)
@@ -35,180 +33,152 @@ for i in range(1, 31):
         )
 
 LOG_CHANNEL = cfg.LOG_CHANNEL
-changeall_running = False
-channel_last_updated = {}
+reportall_running = False
 
 async def log_to_channel(text: str):
-    await asyncio.sleep(2)
     try:
         await app.send_message(LOG_CHANNEL, text)
     except Exception as e:
         print(f"Failed to log message: {e}")
 
-def generate_random_string():
-    characters = string.ascii_lowercase + string.digits
-    return ''.join(random.choices(characters, k=2))
+# Reporting function
+async def report_channel(client, channel_id: int, reason: str = "spam"):
+    reason_map = {
+        "spam": types.InputReportReasonSpam(),
+        "violence": types.InputReportReasonViolence(),
+        "porn": types.InputReportReasonPornography(),
+        "child": types.InputReportReasonChildAbuse(),
+        "copyright": types.InputReportReasonCopyright(),
+        "other": types.InputReportReasonOther()
+    }
+    reason_obj = reason_map.get(reason, types.InputReportReasonSpam())
+
+    try:
+        peer = await client.resolve_peer(channel_id)
+        result = await client.invoke(
+            functions.account.ReportPeer(
+                peer=peer,
+                reason=reason_obj,
+                message="Reported automatically by bot"
+            )
+        )
+        return "✅ Success"
+    except FloodWait as e:
+        await asyncio.sleep(e.value)
+        return f"⏳ FloodWait {e.value}s"
+    except Exception as e:
+        return f"❌ Error: {e}"
 
 @app.on_message(filters.command("start"))
 async def start_message(client: Client, message: Message):
     await message.reply_text(
-        "Hello! Use /create, /change1, /changeall, /stopchangeall."
+        "Hello! Use:\n"
+        "/report1 - Report from one session\n"
+        "/reportall - Report from all sessions continuously\n"
+        "/stopreportall - Stop reporting"
     )
     await log_to_channel(f"👋 Bot started by {message.from_user.mention} (ID: {message.from_user.id})")
 
-@app.on_message(filters.command("create"))
-async def create_channel(client: Client, message: Message):
+# Report from one session
+@app.on_message(filters.command("report1"))
+async def report1_command(client: Client, message: Message):
     sudo_users = cfg.SUDO
     if message.from_user.id not in sudo_users:
-        await message.reply_text("❌ Only sudo users can create channels.")
+        await message.reply_text("❌ Only sudo users can report.")
         return
 
+    if len(message.command) < 3:
+        await message.reply_text("Usage: /report1 <channel_id or @username> <reason>")
+        return
+
+    target = message.command[1]
+    reason = message.command[2].lower()
+
     buttons = [
-        [InlineKeyboardButton(f"Session {i}", callback_data=f"create_session{i}")]
+        [InlineKeyboardButton(f"Session {i}", callback_data=f"report1_session{i}_{target}_{reason}")]
         for i in range(1, 11) if f"session{i}" in session_clients
     ]
     await message.reply_text("Select session:", reply_markup=InlineKeyboardMarkup(buttons))
 
-@app.on_callback_query(filters.regex(r"^create_session(\d+)$"))
-async def handle_create_callback(client, callback_query):
-    session_number = callback_query.data.split("_")[-1]
-    session_key = f"session{session_number}"
-    selected_client = session_clients[session_key]
-    try:
-        channel = await selected_client.create_channel(
-            title="hi",
-            description="A private channel created by the bot."
-        )
-        add_created_channel(channel.id)
-        await callback_query.message.reply_text(f"✅ Channel created in {session_key}: {channel.title}")
-    except Exception as e:
-        await callback_query.message.reply_text(f"❌ Error: {e}")
-
-@app.on_message(filters.command("change1"))
-async def change_channel_link(client: Client, message: Message):
-    sudo_users = cfg.SUDO
-    if message.from_user.id not in sudo_users:
-        await message.reply_text("❌ Only sudo users can change channel links.")
-        return
-
-    buttons = [
-        [InlineKeyboardButton(f"Session {i}", callback_data=f"change1_session{i}")]
-        for i in range(1, 11) if f"session{i}" in session_clients
-    ]
-    await message.reply_text("Select a session:", reply_markup=InlineKeyboardMarkup(buttons))
-
-@app.on_callback_query(filters.regex(r"^change1_session(\d+)$"))
-async def handle_change1_callback(client, callback_query):
-    session_number = callback_query.data.split("_")[-1]
-    session_key = f"session{session_number}"
-    selected_client = session_clients[session_key]
-    try:
-        channels = []
-        async for dialog in selected_client.get_dialogs():
-            if dialog.chat.username:
-                channels.append(dialog.chat)
-
-        if not channels:
-            await callback_query.message.reply_text("❌ No channels with usernames found.")
-            return
-
-        buttons = [
-            [InlineKeyboardButton(text=channel.title, callback_data=f"change1_{session_key}_{channel.id}")]
-            for channel in channels
-        ]
-        await callback_query.message.reply_text(
-            f"Select a channel from {session_key}:",
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
-    except Exception as e:
-        await callback_query.message.reply_text(f"❌ Error: {e}")
-
-@app.on_callback_query(filters.regex(r"^change1_session\d+_(-?\d+)$"))
-async def on_channel_change_callback(client, callback_query):
+@app.on_callback_query(filters.regex(r"^report1_session(\d+)_([^_]+)_(\w+)$"))
+async def handle_report1_callback(client, callback_query):
     parts = callback_query.data.split("_")
-    session_key = parts[1]
-    channel_id = int(parts[2])
+    session_number = parts[1]
+    target = parts[2]
+    reason = parts[3]
+    session_key = f"session{session_number}"
     selected_client = session_clients[session_key]
 
     try:
-        channel = await selected_client.get_chat(channel_id)
-        old_username = channel.username
-        new_suffix = generate_random_string()
-        new_username = f"{old_username[:-3]}{new_suffix}"
+        if target.startswith("@"):
+            chat = await selected_client.get_chat(target)
+            channel_id = chat.id
+        else:
+            channel_id = int(target)
 
-        await selected_client.set_chat_username(channel.id, new_username)
-        await callback_query.message.reply_text(f"✅ Changed to: https://t.me/{new_username}")
-
+        result = await report_channel(selected_client, channel_id, reason)
+        await callback_query.message.reply_text(f"{session_key} → Reported {target} for {reason}\n{result}")
     except Exception as e:
         await callback_query.message.reply_text(f"❌ Error: {e}")
 
-@app.on_message(filters.command("changeall"))
-async def changeall_command(client: Client, message: Message):
-    global changeall_running
+# Report from all sessions continuously
+@app.on_message(filters.command("reportall"))
+async def reportall_command(client: Client, message: Message):
+    global reportall_running
     sudo_users = cfg.SUDO
 
-    if message.chat.id != LOG_CHANNEL and message.from_user and message.from_user.id not in sudo_users:
+    if message.from_user.id not in sudo_users:
         await message.reply_text("❌ Only sudo users can run this command.")
         return
 
-    if changeall_running:
-        await message.reply_text("⚠️ Changeall is already running.")
+    if reportall_running:
+        await message.reply_text("⚠️ Reportall is already running.")
         return
 
-    changeall_running = True
-    with open("changeall.flag", "w") as f:
-        f.write("running")
+    if len(message.command) < 3:
+        await message.reply_text("Usage: /reportall <channel_id or @username> <reason>")
+        return
 
-    await message.reply_text("✅ Started changing usernames for ALL sessions.")
-    await log_to_channel("🚀 Changeall started.")
+    target = message.command[1]
+    reason = message.command[2].lower()
+    reportall_running = True
+
+    await message.reply_text("🚀 Started reporting from ALL sessions.")
+    await log_to_channel(f"🚀 Reportall started for {target} with reason {reason}")
 
     async def process_session(session_key, selected_client):
-        while changeall_running:
+        global reportall_running
+        while reportall_running:
             try:
-                channels = []
-                async for dialog in selected_client.get_dialogs():
-                    if dialog.chat.username:
-                        channels.append(dialog.chat)
+                if target.startswith("@"):
+                    chat = await selected_client.get_chat(target)
+                    channel_id = chat.id
+                else:
+                    channel_id = int(target)
 
-                for channel in channels:
-                    if not changeall_running:
-                        break
-                    old_username = channel.username
-                    new_suffix = generate_random_string()
-                    new_username = f"{old_username[:max(5, len(old_username) - 2)]}{new_suffix}"
-                    try:
-                        await selected_client.set_chat_username(channel.id, new_username)
-                        await log_to_channel(f"✅ {session_key}: @{old_username} → @{new_username}")
-                    except FloodWait as e:
-                        await log_to_channel(f"❌ {session_key} Rate limit exceeded. Waiting {e.value}s.")
-                        await asyncio.sleep(e.value)
-                        continue
-                    except UsernameOccupied:
-                        await log_to_channel(f"⚠️ {session_key}: @{new_username} already taken.")
-                        continue
-                    except Exception as e:
-                        await log_to_channel(f"❌ {session_key} error: {e}")
-                        continue
+                result = await report_channel(selected_client, channel_id, reason)
+                await log_to_channel(f"{session_key} → {target} → {reason} → {result}")
 
-                    await asyncio.sleep(60 * 90)  # 1 hour delay per channel
+                await asyncio.sleep(60 * 30)  # wait 30 minutes between reports per session
             except Exception as e:
-                await asyncio.sleep(2)
+                await log_to_channel(f"❌ {session_key} error: {e}")
+                await asyncio.sleep(10)
 
     for session_key, selected_client in session_clients.items():
         asyncio.create_task(process_session(session_key, selected_client))
 
-                        
-@app.on_message(filters.command("stopchangeall"))
-async def stop_changeall(client: Client, message: Message):
-    global changeall_running
+# Stop reporting
+@app.on_message(filters.command("stopreportall"))
+async def stop_reportall(client: Client, message: Message):
+    global reportall_running
     sudo_users = cfg.SUDO
     if message.from_user.id not in sudo_users:
-        await message.reply_text("❌ Only sudo users can stop the process.")
+        await message.reply_text("❌ Only sudo users can stop reporting.")
         return
 
-    changeall_running = False
-    await message.reply_text("🛑 Changeall process stopped.")
-    await log_to_channel(f"🛑 Changeall process stopped by {message.from_user.mention}.")
+    reportall_running = False
+    await message.reply_text("🛑 Reportall process stopped.")
+    await log_to_channel(f"🛑 Reportall stopped by {message.from_user.mention}")
 
 # Start all session clients
 for client in session_clients.values():
