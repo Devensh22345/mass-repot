@@ -20,15 +20,18 @@ for i in range(1, 31):
             session_string=session_string
         )
 
-LOG_CHANNEL = cfg.LOG_CHANNEL
 report_data = {}  # store per-user reporting state
 
-async def log_to_channel(text: str):
-    try:
-        await app.send_message(LOG_CHANNEL, text)
-    except Exception as e:
-        print(f"Log failed: {e}")
 
+# ---------- Logging only in sudo DM ----------
+async def log_to_user(user_id: int, text: str):
+    try:
+        await app.send_message(user_id, text)
+    except Exception as e:
+        print(f"Log DM failed: {e}")
+
+
+# ---------- Start command ----------
 @app.on_message(filters.command("start"))
 async def start_message(client: Client, message: Message):
     txt = (
@@ -39,9 +42,10 @@ async def start_message(client: Client, message: Message):
         "⚠️ Only SUDO users can use this bot."
     )
     await message.reply_text(txt)
-    await log_to_channel(f"✅ Bot started by {message.from_user.mention} (ID: {message.from_user.id})")
+    await log_to_user(message.from_user.id, f"✅ Bot started by {message.from_user.mention} (ID: {message.from_user.id})")
 
-# Step 1: /report
+
+# ---------- Step 1: /report ----------
 @app.on_message(filters.command("report"))
 async def report_command(client, message: Message):
     if message.from_user.id not in cfg.SUDO:
@@ -52,7 +56,8 @@ async def report_command(client, message: Message):
     await message.reply_text("✍️ Send the username or ID of the target channel/group/bot (example: @badchannel):")
     report_data[message.from_user.id]["step"] = "username"
 
-# Handle text replies in flow
+
+# ---------- Handle text replies in flow ----------
 @app.on_message(filters.text & ~filters.command(["report", "start", "stopreport"]))
 async def handle_text_reply(client: Client, message: Message):
     user_id = message.from_user.id
@@ -94,7 +99,8 @@ async def handle_text_reply(client: Client, message: Message):
         await start_reporting(user_id, message)
         report_data.pop(user_id, None)
 
-# Handle reason selection
+
+# ---------- Handle reason selection ----------
 @app.on_callback_query(filters.regex(r"^reason_"))
 async def handle_reason_callback(client: Client, cq: CallbackQuery):
     user_id = cq.from_user.id
@@ -107,7 +113,8 @@ async def handle_reason_callback(client: Client, cq: CallbackQuery):
     report_data[user_id]["step"] = "description"
     await cq.message.reply_text("✍️ Send a short description for this report:")
 
-# Start reporting process
+
+# ---------- Start reporting process ----------
 async def start_reporting(user_id, message: Message):
     data = report_data[user_id]
     target = data["username"]
@@ -125,20 +132,22 @@ async def start_reporting(user_id, message: Message):
     }
     reason_obj = reason_map.get(reason, types.InputReportReasonSpam())
 
-    await log_to_channel(f"🚨 Mass report started by {message.from_user.mention}\n"
-                         f"Target: {target}\nReason: {reason}\nReports per session: {count}")
+    await log_to_user(user_id,
+        f"🚨 Mass report started\n"
+        f"Target: {target}\nReason: {reason}\nReports per session: {count}"
+    )
 
     for session_key, sc in session_clients.items():
         try:
             await sc.join_chat(target)  # join channel/group first
         except Exception as e:
-            await log_to_channel(f"⚠️ {session_key} failed to join {target}: {e}")
+            await log_to_user(user_id, f"⚠️ {session_key} failed to join {target}: {e}")
 
         try:
             chat = await sc.get_chat(target)
             peer = await sc.resolve_peer(chat.id)
         except Exception as e:
-            await log_to_channel(f"❌ {session_key} failed to resolve {target}: {e}")
+            await log_to_user(user_id, f"❌ {session_key} failed to resolve {target}: {e}")
             continue
 
         for i in range(count):
@@ -148,15 +157,16 @@ async def start_reporting(user_id, message: Message):
                     reason=reason_obj,
                     message=description
                 ))
-                await log_to_channel(f"✅ {session_key} → Report {i+1}/{count} sent for {target}")
+                await log_to_user(user_id, f"✅ {session_key} → Report {i+1}/{count} sent for {target}")
                 await asyncio.sleep(random.randint(5, 15))  # small delay
             except Exception as e:
-                await log_to_channel(f"❌ {session_key} report failed: {e}")
+                await log_to_user(user_id, f"❌ {session_key} report failed: {e}")
                 await asyncio.sleep(3)
 
-    await log_to_channel(f"🛑 Mass report completed for {target}")
+    await log_to_user(user_id, f"🛑 Mass report completed for {target}")
 
-# Start all session clients
+
+# ---------- Start all session clients ----------
 for client in session_clients.values():
     client.start()
 
