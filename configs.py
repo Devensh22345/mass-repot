@@ -4,7 +4,7 @@ class Config:
     # Basic Telegram Bot & User Client Configurations
     API_ID = int(os.getenv("API_ID", "22207976"))
     API_HASH = os.getenv("API_HASH", "5c0ad7c48a86afac87630ba28b42560d")
-    BOT_TOKEN = os.getenv("BOT_TOKEN", "7686232626:AAFb8LoDG_Ioy-r3pGA9gfJejRm4I60HCnA")
+    BOT_TOKEN = os.getenv("BOT_TOKEN", "7567832185:AAErNpedjqTPpYJ_NjFEOb42EFJyfSeKjpw")
    
     SESSION_STRING_1 = os.getenv("SESSION_STRING_1", "")
     #SESSION_STRING_2 = os.getenv("SESSION_STRING_2", "")
