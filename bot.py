@@ -1,15 +1,9 @@
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from configs import cfg
-from database import add_created_channel
-import random
-import string
-import asyncio
-import pyrogram.utils
-from pyrogram.errors import FloodWait
 from pyrogram.raw import functions, types
-
-pyrogram.utils.MIN_CHANNEL_ID = -1009147483647
+import asyncio
+import random
 
 # Initialize Bot Client
 app = Client(
@@ -33,7 +27,7 @@ for i in range(1, 31):
         )
 
 LOG_CHANNEL = cfg.LOG_CHANNEL
-reportall_running = False
+report_states = {}  # user_id -> state data
 
 async def log_to_channel(text: str):
     try:
@@ -41,144 +35,129 @@ async def log_to_channel(text: str):
     except Exception as e:
         print(f"Failed to log message: {e}")
 
-# Reporting function
-async def report_channel(client, channel_id: int, reason: str = "spam"):
-    reason_map = {
-        "spam": types.InputReportReasonSpam(),
-        "violence": types.InputReportReasonViolence(),
-        "porn": types.InputReportReasonPornography(),
-        "child": types.InputReportReasonChildAbuse(),
-        "copyright": types.InputReportReasonCopyright(),
-        "other": types.InputReportReasonOther()
-    }
-    reason_obj = reason_map.get(reason, types.InputReportReasonSpam())
-
-    try:
-        peer = await client.resolve_peer(channel_id)
-        result = await client.invoke(
-            functions.account.ReportPeer(
-                peer=peer,
-                reason=reason_obj,
-                message="Reported automatically by bot"
-            )
-        )
-        return "✅ Success"
-    except FloodWait as e:
-        await asyncio.sleep(e.value)
-        return f"⏳ FloodWait {e.value}s"
-    except Exception as e:
-        return f"❌ Error: {e}"
-
 @app.on_message(filters.command("start"))
 async def start_message(client: Client, message: Message):
     await message.reply_text(
-        "Hello! Use:\n"
-        "/report1 - Report from one session\n"
-        "/reportall - Report from all sessions continuously\n"
-        "/stopreportall - Stop reporting"
+        "👋 Hello! I can mass-report channels, groups, or bots using your session accounts.\n\n"
+        "Use /report to start the process."
     )
     await log_to_channel(f"👋 Bot started by {message.from_user.mention} (ID: {message.from_user.id})")
 
-# Report from one session
-@app.on_message(filters.command("report1"))
-async def report1_command(client: Client, message: Message):
-    sudo_users = cfg.SUDO
-    if message.from_user.id not in sudo_users:
-        await message.reply_text("❌ Only sudo users can report.")
+# Step 1: Start report process
+@app.on_message(filters.command("report"))
+async def report_command(client: Client, message: Message):
+    report_states[message.from_user.id] = {"step": "username"}
+    await message.reply_text("🔎 Send the username or channel ID you want to report:")
+
+# Step 2: Handle state machine
+@app.on_message(filters.text & ~filters.command(["start", "report"]))
+async def handle_report_steps(client: Client, message: Message):
+    user_id = message.from_user.id
+    if user_id not in report_states:
         return
 
-    if len(message.command) < 3:
-        await message.reply_text("Usage: /report1 <channel_id or @username> <reason>")
+    state = report_states[user_id]
+
+    # Step 1: Username / Channel ID
+    if state["step"] == "username":
+        state["target"] = message.text.strip()
+        state["step"] = "count"
+        await message.reply_text("📌 How many reports per session should I send?")
         return
 
-    target = message.command[1]
-    reason = message.command[2].lower()
+    # Step 2: Count
+    if state["step"] == "count":
+        if not message.text.isdigit():
+            await message.reply_text("❌ Please send a valid number.")
+            return
+        state["count"] = int(message.text)
+        state["step"] = "reason"
+        buttons = [
+            [InlineKeyboardButton("🚫 Spam", callback_data="reason_spam")],
+            [InlineKeyboardButton("👶 Child Abuse", callback_data="reason_child")],
+            [InlineKeyboardButton("⚔️ Violence", callback_data="reason_violence")],
+            [InlineKeyboardButton("🔞 Porn", callback_data="reason_porn")],
+            [InlineKeyboardButton("📢 Copyright", callback_data="reason_copyright")],
+            [InlineKeyboardButton("❓ Other", callback_data="reason_other")],
+        ]
+        await message.reply_text("⚠️ Choose report reason:", reply_markup=InlineKeyboardMarkup(buttons))
+        return
 
-    buttons = [
-        [InlineKeyboardButton(f"Session {i}", callback_data=f"report1_session{i}_{target}_{reason}")]
-        for i in range(1, 11) if f"session{i}" in session_clients
-    ]
-    await message.reply_text("Select session:", reply_markup=InlineKeyboardMarkup(buttons))
+    # Step 4: Description
+    if state["step"] == "description":
+        state["description"] = message.text.strip()
+        await message.reply_text("🚀 Starting report process...")
+        asyncio.create_task(start_reporting(user_id))
+        del report_states[user_id]
+        return
 
-@app.on_callback_query(filters.regex(r"^report1_session(\d+)_([^_]+)_(\w+)$"))
-async def handle_report1_callback(client, callback_query):
-    parts = callback_query.data.split("_")
-    session_number = parts[1]
-    target = parts[2]
-    reason = parts[3]
-    session_key = f"session{session_number}"
-    selected_client = session_clients[session_key]
+# Step 3: Reason selection
+@app.on_callback_query(filters.regex(r"^reason_"))
+async def handle_reason_callback(client: Client, callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if user_id not in report_states:
+        return
+    reason = callback.data.replace("reason_", "")
+    report_states[user_id]["reason"] = reason
+    report_states[user_id]["step"] = "description"
+    await callback.message.reply_text("✍️ Please provide a short description for the report.")
+    await callback.answer()
 
+# Function to map reason strings
+def get_reason(reason: str):
+    mapping = {
+        "spam": types.InputReportReasonSpam(),
+        "child": types.InputReportReasonChildAbuse(),
+        "violence": types.InputReportReasonViolence(),
+        "porn": types.InputReportReasonPornography(),
+        "copyright": types.InputReportReasonCopyright(),
+        "other": types.InputReportReasonOther(),
+    }
+    return mapping.get(reason, types.InputReportReasonSpam())
+
+# Reporting function
+async def report_channel(client, target, reason, description):
     try:
         if target.startswith("@"):
-            chat = await selected_client.get_chat(target)
-            channel_id = chat.id
+            chat = await client.get_chat(target)
+            peer = await client.resolve_peer(chat.id)
         else:
-            channel_id = int(target)
+            peer = await client.resolve_peer(int(target))
 
-        result = await report_channel(selected_client, channel_id, reason)
-        await callback_query.message.reply_text(f"{session_key} → Reported {target} for {reason}\n{result}")
+        result = await client.invoke(
+            functions.account.ReportPeer(
+                peer=peer,
+                reason=get_reason(reason),
+                message=description
+            )
+        )
+        return True, str(result)
     except Exception as e:
-        await callback_query.message.reply_text(f"❌ Error: {e}")
+        return False, str(e)
 
-# Report from all sessions continuously
-@app.on_message(filters.command("reportall"))
-async def reportall_command(client: Client, message: Message):
-    global reportall_running
-    sudo_users = cfg.SUDO
+# Run reporting across all sessions
+async def start_reporting(user_id):
+    state = report_states.get(user_id, {})
+    target = state["target"]
+    count = state["count"]
+    reason = state["reason"]
+    description = state.get("description", "Reported by automation")
 
-    if message.from_user.id not in sudo_users:
-        await message.reply_text("❌ Only sudo users can run this command.")
-        return
+    await log_to_channel(f"🚀 Reporting started for {target}\nReason: {reason}\nDescription: {description}")
 
-    if reportall_running:
-        await message.reply_text("⚠️ Reportall is already running.")
-        return
-
-    if len(message.command) < 3:
-        await message.reply_text("Usage: /reportall <channel_id or @username> <reason>")
-        return
-
-    target = message.command[1]
-    reason = message.command[2].lower()
-    reportall_running = True
-
-    await message.reply_text("🚀 Started reporting from ALL sessions.")
-    await log_to_channel(f"🚀 Reportall started for {target} with reason {reason}")
-
-    async def process_session(session_key, selected_client):
-        global reportall_running
-        while reportall_running:
+    for session_key, session_client in session_clients.items():
+        for i in range(count):
             try:
-                if target.startswith("@"):
-                    chat = await selected_client.get_chat(target)
-                    channel_id = chat.id
+                success, result = await report_channel(session_client, target, reason, description)
+                if success:
+                    await log_to_channel(f"✅ {session_key} reported {target} (reason={reason})")
                 else:
-                    channel_id = int(target)
-
-                result = await report_channel(selected_client, channel_id, reason)
-                await log_to_channel(f"{session_key} → {target} → {reason} → {result}")
-
-                await asyncio.sleep(60 * 30)  # wait 30 minutes between reports per session
+                    await log_to_channel(f"❌ {session_key} failed: {result}")
+                await asyncio.sleep(3)  # small delay to avoid FloodWait
             except Exception as e:
                 await log_to_channel(f"❌ {session_key} error: {e}")
-                await asyncio.sleep(10)
 
-    for session_key, selected_client in session_clients.items():
-        asyncio.create_task(process_session(session_key, selected_client))
-
-# Stop reporting
-@app.on_message(filters.command("stopreportall"))
-async def stop_reportall(client: Client, message: Message):
-    global reportall_running
-    sudo_users = cfg.SUDO
-    if message.from_user.id not in sudo_users:
-        await message.reply_text("❌ Only sudo users can stop reporting.")
-        return
-
-    reportall_running = False
-    await message.reply_text("🛑 Reportall process stopped.")
-    await log_to_channel(f"🛑 Reportall stopped by {message.from_user.mention}")
+    await log_to_channel(f"🛑 Reporting finished for {target}")
 
 # Start all session clients
 for client in session_clients.values():
