@@ -1,173 +1,257 @@
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.raw import functions, types
-import asyncio, random
-from configs import cfg
+import asyncio
+import json
+import logging
 
-# Bot client
-app = Client("bot", api_id=cfg.API_ID, api_hash=cfg.API_HASH, bot_token=cfg.BOT_TOKEN)
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# User sessions
-session_clients = {}
-for i in range(1, 31):
-    session_key = f"session{i}"
-    session_string = getattr(cfg, f"SESSION_STRING_{i}", None)
-    if session_string:
-        session_clients[session_key] = Client(
-            session_key,
-            api_id=cfg.API_ID,
-            api_hash=cfg.API_HASH,
-            session_string=session_string
+class ReportBotMVP:
+    def __init__(self, api_id, api_hash, bot_token, session_string, sudo_users):
+        self.api_id = api_id
+        self.api_hash = api_hash
+        self.bot_token = bot_token
+        self.sudo_users = sudo_users
+        
+        # Bot client
+        self.app = Client("report_bot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
+        
+        # Single user session (MVP uses only 1 session)
+        self.user_client = None
+        if session_string:
+            self.user_client = Client("user_session", api_id=api_id, api_hash=api_hash, session_string=session_string)
+        
+        # Report states
+        self.report_states = {}
+        
+        # Report reasons mapping
+        self.reason_map = {
+            "spam": types.InputReportReasonSpam(),
+            "violence": types.InputReportReasonViolence(),
+            "other": types.InputReportReasonOther()
+        }
+        
+        self.setup_handlers()
+    
+    def setup_handlers(self):
+        @self.app.on_message(filters.command("start"))
+        async def start_handler(client, message):
+            await self.handle_start(message)
+        
+        @self.app.on_message(filters.command("report"))
+        async def report_handler(client, message):
+            await self.handle_report_command(message)
+        
+        @self.app.on_message(filters.command("cancel"))
+        async def cancel_handler(client, message):
+            await self.handle_cancel(message)
+        
+        @self.app.on_message(filters.text & ~filters.command(["start", "report", "cancel"]))
+        async def text_handler(client, message):
+            await self.handle_text_input(message)
+        
+        @self.app.on_callback_query(filters.regex(r"^reason_"))
+        async def callback_handler(client, query):
+            await self.handle_reason_callback(query)
+    
+    async def handle_start(self, message: Message):
+        if not self.is_sudo_user(message.from_user.id):
+            await message.reply("❌ Access denied.")
+            return
+        
+        welcome_text = (
+            "🤖 **Report Bot MVP**\n\n"
+            "**Available Commands:**\n"
+            "• `/report` - Start report process\n"
+            "• `/cancel` - Cancel current operation\n\n"
+            "⚠️ **WARNING:** Use only for legitimate moderation purposes."
         )
-
-report_data = {}  # store per-user reporting state
-
-
-# ---------- Logging only in sudo DM ----------
-async def log_to_user(user_id: int, text: str):
-    try:
-        await app.send_message(user_id, text)
-    except Exception as e:
-        print(f"Log DM failed: {e}")
-
-
-# ---------- Start command ----------
-@app.on_message(filters.command("start"))
-async def start_message(client: Client, message: Message):
-    txt = (
-        "👋 Hello! I can mass-report Telegram channels, groups, or bots.\n\n"
-        "Commands:\n"
-        "• /report → Start reporting flow\n"
-        "• /stopreport → Cancel current reporting task\n\n"
-        "⚠️ Only SUDO users can use this bot."
-    )
-    await message.reply_text(txt)
-    await log_to_user(message.from_user.id, f"✅ Bot started by {message.from_user.mention} (ID: {message.from_user.id})")
-
-
-# ---------- Step 1: /report ----------
-@app.on_message(filters.command("report"))
-async def report_command(client, message: Message):
-    if message.from_user.id not in cfg.SUDO:
-        await message.reply_text("❌ Only sudo users can use this command.")
-        return
-
-    report_data[message.from_user.id] = {}
-    await message.reply_text("✍️ Send the username or ID of the target channel/group/bot (example: @badchannel):")
-    report_data[message.from_user.id]["step"] = "username"
-
-
-# ---------- Handle text replies in flow ----------
-@app.on_message(filters.text & ~filters.command(["report", "start", "stopreport"]))
-async def handle_text_reply(client: Client, message: Message):
-    user_id = message.from_user.id
-    if user_id not in report_data or "step" not in report_data[user_id]:
-        return
-
-    step = report_data[user_id]["step"]
-
-    # Step: username
-    if step == "username":
-        report_data[user_id]["username"] = message.text.strip()
-        report_data[user_id]["step"] = "count"
-        await message.reply_text("🔢 How many reports to send from each session?")
-        return
-
-    # Step: count
-    if step == "count":
-        try:
-            count = int(message.text.strip())
-            report_data[user_id]["count"] = count
-            report_data[user_id]["step"] = "reason"
+        await message.reply(welcome_text)
+    
+    async def handle_report_command(self, message: Message):
+        if not self.is_sudo_user(message.from_user.id):
+            await message.reply("❌ Access denied.")
+            return
+        
+        if not self.user_client:
+            await message.reply("❌ No user session configured.")
+            return
+        
+        user_id = message.from_user.id
+        self.report_states[user_id] = {"step": "target"}
+        await message.reply("📝 Send the target username or ID (e.g., @channel):")
+    
+    async def handle_cancel(self, message: Message):
+        user_id = message.from_user.id
+        if user_id in self.report_states:
+            del self.report_states[user_id]
+            await message.reply("✅ Operation cancelled.")
+        else:
+            await message.reply("ℹ️ No active operation to cancel.")
+    
+    async def handle_text_input(self, message: Message):
+        user_id = message.from_user.id
+        
+        if user_id not in self.report_states:
+            return
+        
+        state = self.report_states[user_id]
+        step = state.get("step")
+        
+        if step == "target":
+            target = message.text.strip()
+            if not target:
+                await message.reply("❌ Please provide a valid target.")
+                return
+            
+            state["target"] = target
+            state["step"] = "reason"
+            
+            # Show reason buttons (simplified for MVP)
             buttons = [
                 [InlineKeyboardButton("🚫 Spam", callback_data="reason_spam")],
-                [InlineKeyboardButton("👶 Child Abuse", callback_data="reason_child")],
                 [InlineKeyboardButton("🔪 Violence", callback_data="reason_violence")],
-                [InlineKeyboardButton("🔞 Pornography", callback_data="reason_porn")],
-                [InlineKeyboardButton("💿 Copyright", callback_data="reason_copyright")],
                 [InlineKeyboardButton("❔ Other", callback_data="reason_other")]
             ]
-            await message.reply_text("⚠️ Select report reason:", reply_markup=InlineKeyboardMarkup(buttons))
-        except:
-            await message.reply_text("❌ Invalid number. Send an integer.")
-        return
-
-    # Step: description
-    if step == "description":
-        report_data[user_id]["description"] = message.text.strip()
-        await message.reply_text("🚀 Starting mass-reporting...")
-        await start_reporting(user_id, message)
-        report_data.pop(user_id, None)
-
-
-# ---------- Handle reason selection ----------
-@app.on_callback_query(filters.regex(r"^reason_"))
-async def handle_reason_callback(client: Client, cq: CallbackQuery):
-    user_id = cq.from_user.id
-    if user_id not in report_data:
-        await cq.answer("❌ No active report.", show_alert=True)
-        return
-
-    reason = cq.data.replace("reason_", "")
-    report_data[user_id]["reason"] = reason
-    report_data[user_id]["step"] = "description"
-    await cq.message.reply_text("✍️ Send a short description for this report:")
-
-
-# ---------- Start reporting process ----------
-async def start_reporting(user_id, message: Message):
-    data = report_data[user_id]
-    target = data["username"]
-    reason = data["reason"]
-    count = data["count"]
-    description = data["description"]
-
-    reason_map = {
-        "spam": types.InputReportReasonSpam(),
-        "child": types.InputReportReasonChildAbuse(),
-        "violence": types.InputReportReasonViolence(),
-        "porn": types.InputReportReasonPornography(),
-        "copyright": types.InputReportReasonCopyright(),
-        "other": types.InputReportReasonOther()
-    }
-    reason_obj = reason_map.get(reason, types.InputReportReasonSpam())
-
-    await log_to_user(user_id,
-        f"🚨 Mass report started\n"
-        f"Target: {target}\nReason: {reason}\nReports per session: {count}"
-    )
-
-    for session_key, sc in session_clients.items():
+            await message.reply(
+                "⚠️ Select report reason:",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        
+        elif step == "description":
+            description = message.text.strip()
+            state["description"] = description
+            
+            # Start reporting
+            await message.reply("🚀 Processing report...")
+            await self.execute_report(user_id, message)
+    
+    async def handle_reason_callback(self, query: CallbackQuery):
+        user_id = query.from_user.id
+        
+        if user_id not in self.report_states:
+            await query.answer("❌ No active report session.")
+            return
+        
+        reason = query.data.replace("reason_", "")
+        self.report_states[user_id]["reason"] = reason
+        self.report_states[user_id]["step"] = "description"
+        
+        await query.message.reply("✍️ Send a brief description for the report:")
+        await query.answer()
+    
+    async def execute_report(self, user_id: int, message: Message):
         try:
-            await sc.join_chat(target)  # join channel/group first
-        except Exception as e:
-            await log_to_user(user_id, f"⚠️ {session_key} failed to join {target}: {e}")
-
-        try:
-            chat = await sc.get_chat(target)
-            peer = await sc.resolve_peer(chat.id)
-        except Exception as e:
-            await log_to_user(user_id, f"❌ {session_key} failed to resolve {target}: {e}")
-            continue
-
-        for i in range(count):
+            state = self.report_states[user_id]
+            target = state["target"]
+            reason = state["reason"]
+            description = state["description"]
+            
+            # Log the report attempt
+            logger.info(f"Report attempt: User {user_id}, Target: {target}, Reason: {reason}")
+            
+            # Try to resolve the target
             try:
-                await sc.invoke(functions.account.ReportPeer(
+                chat = await self.user_client.get_chat(target)
+                peer = await self.user_client.resolve_peer(chat.id)
+            except Exception as e:
+                await message.reply(f"❌ Failed to find target: {str(e)}")
+                return
+            
+            # Submit report
+            reason_obj = self.reason_map.get(reason, types.InputReportReasonOther())
+            
+            try:
+                await self.user_client.invoke(functions.account.ReportPeer(
                     peer=peer,
                     reason=reason_obj,
                     message=description
                 ))
-                await log_to_user(user_id, f"✅ {session_key} → Report {i+1}/{count} sent for {target}")
-                await asyncio.sleep(random.randint(5, 15))  # small delay
+                
+                await message.reply(
+                    f"✅ **Report submitted successfully**\n"
+                    f"Target: `{target}`\n"
+                    f"Reason: {reason}\n"
+                    f"Description: {description}"
+                )
+                
+                # Log successful report
+                self.log_report(user_id, target, reason, description, "success")
+                
             except Exception as e:
-                await log_to_user(user_id, f"❌ {session_key} report failed: {e}")
-                await asyncio.sleep(3)
+                await message.reply(f"❌ Report failed: {str(e)}")
+                self.log_report(user_id, target, reason, description, "failed", str(e))
+        
+        except Exception as e:
+            await message.reply(f"❌ Unexpected error: {str(e)}")
+            logger.error(f"Report execution error: {e}")
+        
+        finally:
+            # Clean up state
+            if user_id in self.report_states:
+                del self.report_states[user_id]
+    
+    def log_report(self, user_id: int, target: str, reason: str, description: str, status: str, error: str = None):
+        """Log report attempts for audit purposes"""
+        log_entry = {
+            "user_id": user_id,
+            "target": target,
+            "reason": reason,
+            "description": description,
+            "status": status,
+            "error": error,
+            "timestamp": asyncio.get_event_loop().time()
+        }
+        logger.info(f"Report log: {json.dumps(log_entry)}")
+    
+    def is_sudo_user(self, user_id: int) -> bool:
+        return user_id in self.sudo_users
+    
+    async def start(self):
+        """Start the bot and user client"""
+        if self.user_client:
+            await self.user_client.start()
+        await self.app.start()
+        logger.info("Bot started successfully")
+    
+    async def stop(self):
+        """Stop the bot and user client"""
+        if self.user_client:
+            await self.user_client.stop()
+        await self.app.stop()
+        logger.info("Bot stopped")
 
-    await log_to_user(user_id, f"🛑 Mass report completed for {target}")
-
-
-# ---------- Start all session clients ----------
-for client in session_clients.values():
-    client.start()
-
-app.run()
+# Usage example (create a separate config file)
+if __name__ == "__main__":
+    # Configuration (move to separate config.py file)
+    CONFIG = {
+        "API_ID": 12345,  # Your API ID
+        "API_HASH": "your_api_hash",  # Your API Hash
+        "BOT_TOKEN": "your_bot_token",  # Your bot token
+        "SESSION_STRING": "your_session_string",  # User session string
+        "SUDO_USERS": [123456789]  # List of sudo user IDs
+    }
+    
+    bot = ReportBotMVP(
+        api_id=CONFIG["API_ID"],
+        api_hash=CONFIG["API_HASH"],
+        bot_token=CONFIG["BOT_TOKEN"],
+        session_string=CONFIG["SESSION_STRING"],
+        sudo_users=CONFIG["SUDO_USERS"]
+    )
+    
+    # Run the bot
+    import asyncio
+    
+    async def main():
+        await bot.start()
+        print("Bot is running... Press Ctrl+C to stop")
+        try:
+            await asyncio.Future()  # Run forever
+        except KeyboardInterrupt:
+            await bot.stop()
+    
+    asyncio.run(main())
