@@ -1,3 +1,5 @@
+import logging, traceback, asyncio
+from pyrogram.errors import FloodWait
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.raw import functions, types
@@ -5,9 +7,9 @@ import asyncio
 import json
 import logging
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 class ReportBotMVP:
     def __init__(self, api_id, api_hash, bot_token, session_string, sudo_users):
@@ -225,7 +227,7 @@ class ReportBotMVP:
         logger.info("Bot stopped")
 
 # Usage example (create a separate config file)
-if __name__ == "__main__":
+
     # Configuration (move to separate config.py file)
     CONFIG = {
         "API_ID": 12345,  # Your API ID
@@ -244,14 +246,21 @@ if __name__ == "__main__":
     )
     
     # Run the bot
-    import asyncio
-    
-    async def main():
-        await bot.start()
-        print("Bot is running... Press Ctrl+C to stop")
-        try:
-            await asyncio.Future()  # Run forever
-        except KeyboardInterrupt:
-            await bot.stop()
-    
-    asyncio.run(main())
+if __name__ == "__main__":
+    try:
+        # Start all sessions with error handling
+        for client in session_clients.values():
+            try:
+                client.start()
+                logger.info(f"Started session: {client.name}")
+            except Exception as e:
+                logger.error(f"Failed to start session {client.name}: {e}")
+        
+        logger.info("Starting main bot...")
+        app.run()
+        
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot crashed: {e}")
+        traceback.print_exc()
