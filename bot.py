@@ -83,11 +83,7 @@ async def start_message(client: Client, message: Message):
     )
     await message.reply_text(txt)
     await log_to_user(message.from_user.id, f"✅ Bot started by {message.from_user.mention} (ID: {message.from_user.id})")
-        
-    except Exception as e:
-        logger.error(f"Error in start_message: {e}")
-        await message.reply_text("❌ An error occurred. Please try again.")
-
+    
 @app.on_message(filters.command("status"))
 async def status_message(client: Client, message: Message):
     """Handle /status command"""
