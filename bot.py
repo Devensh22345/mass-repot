@@ -74,21 +74,15 @@ def is_valid_target(target: str) -> bool:
 # ---------- Command Handlers ----------
 @app.on_message(filters.command("start"))
 async def start_message(client: Client, message: Message):
-    """Handle /start command"""
-    try:
-        txt = (
-            "👋 Hello! I can mass-report Telegram channels, groups, or bots.\n\n"
-            "📋 **Commands:**\n"
-            "• `/report` → Start reporting flow\n"
-            "• `/stopreport` → Cancel current reporting task\n"
-            "• `/status` → Check bot status\n\n"
-            "⚠️ **Note:** Only SUDO users can use this bot."
-        )
-        await message.reply_text(txt)
-        
-        user_mention = message.from_user.mention if message.from_user else "Unknown"
-        user_id = message.from_user.id if message.from_user else "Unknown"
-        await log_to_user(message.from_user.id, f"✅ Bot started by {user_mention} (ID: {user_id})")
+    txt = (
+        "👋 Hello! I can mass-report Telegram channels, groups, or bots.\n\n"
+        "Commands:\n"
+        "• /report → Start reporting flow\n"
+        "• /stopreport → Cancel current reporting task\n\n"
+        "⚠️ Only SUDO users can use this bot."
+    )
+    await message.reply_text(txt)
+    await log_to_user(message.from_user.id, f"✅ Bot started by {message.from_user.mention} (ID: {message.from_user.id})")
         
     except Exception as e:
         logger.error(f"Error in start_message: {e}")
