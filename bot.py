@@ -16,13 +16,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Bot client - HEROKU VERSION
+# Bot client - DEBUG VERSION
 app = Client(
     "bot", 
     api_id=cfg.API_ID, 
     api_hash=cfg.API_HASH, 
-    bot_token=cfg.BOT_TOKEN,
-    workers=4  # Important for Heroku
+    bot_token=cfg.BOT_TOKEN
 )
 
 session_clients = {}
@@ -41,19 +40,35 @@ async def initialize_sessions():
                     session_key,
                     api_id=cfg.API_ID,
                     api_hash=cfg.API_HASH,
-                    session_string=session_string,
-                    workers=1  # Lower workers for sessions
+                    session_string=session_string
                 )
                 session_clients[session_key] = client
                 logger.info(f"Initialized {session_key}")
             except Exception as e:
                 logger.error(f"Failed to initialize {session_key}: {e}")
 
+# DEBUG: Log all incoming messages
+@app.on_message()
+async def debug_all_messages(client: Client, message: Message):
+    """Debug handler to log all incoming messages"""
+    try:
+        user_id = message.from_user.id if message.from_user else "None"
+        username = message.from_user.username if message.from_user else "None"
+        text = message.text if message.text else "No text"
+        
+        logger.info(f"📨 Received message: User {user_id} (@{username}): {text}")
+        print(f"📨 Message from {user_id}: {text}")
+        
+    except Exception as e:
+        logger.error(f"Error in debug handler: {e}")
+
 # ---------- Helper Functions ----------
 async def log_to_user(user_id: int, text: str):
     """Send log message to user with error handling"""
     try:
+        logger.info(f"Sending to user {user_id}: {text}")
         await app.send_message(user_id, text)
+        logger.info(f"✅ Message sent to {user_id}")
     except FloodWait as e:
         logger.warning(f"FloodWait in log_to_user: {e.value} seconds")
         await asyncio.sleep(e.value)
@@ -77,40 +92,87 @@ def is_valid_target(target: str) -> bool:
     return False
 
 # ---------- Command Handlers ----------
-@app.on_message(filters.command("start"))
+@app.on_message(filters.command("start") & filters.private)
 async def start_message(client: Client, message: Message):
-    """Handle /start command - HEROKU VERSION"""
+    """Handle /start command"""
     try:
+        logger.info(f"🚀 START command from user {message.from_user.id}")
+        
         txt = (
-            "👋 Hello! I can mass-report Telegram channels, groups, or bots.\n\n"
-            "📋 **Commands:**\n"
-            "• `/report` → Start reporting flow\n"
-            "• `/stopreport` → Cancel current reporting task\n"
-            "• `/status` → Check bot status\n"
-            "• `/test` → Test bot functionality\n\n"
-            "⚠️ **Note:** Only SUDO users can use this bot.\n\n"
-            "🟢 **Heroku Status:** Online"
+            "👋 **Hello! Bot is working!**\n\n"
+            "📋 **Available Commands:**\n"
+            "• `/start` → Show this message\n"
+            "• `/test` → Test bot functionality\n"
+            "• `/ping` → Simple ping test\n"
+            "• `/report` → Start reporting (SUDO only)\n"
+            "• `/status` → Check status (SUDO only)\n\n"
+            "🟢 **Status:** Online and responding!\n"
+            f"🆔 **Your ID:** `{message.from_user.id}`"
         )
+        
         await message.reply_text(txt)
+        logger.info(f"✅ START response sent to {message.from_user.id}")
         
-        user_mention = message.from_user.mention if message.from_user else "Unknown"
-        user_id = message.from_user.id if message.from_user else "Unknown"
-        logger.info(f"Start command from {user_id}")
-        
-        # Test if user is SUDO
+        # Check SUDO status
         if message.from_user.id in cfg.SUDO:
-            await message.reply_text("✅ You are authorized to use this bot!")
+            await message.reply_text("🔓 **You are authorized** to use all commands!")
+            logger.info(f"User {message.from_user.id} is SUDO")
         else:
-            await message.reply_text("❌ You are not authorized. Contact admin.")
+            await message.reply_text("🔒 You have **basic access**. Contact admin for full access.")
+            logger.info(f"User {message.from_user.id} is NOT SUDO")
         
     except Exception as e:
         logger.error(f"Error in start_message: {e}")
-        await message.reply_text("❌ An error occurred. Please try again.")
+        try:
+            await message.reply_text("❌ An error occurred. Please try again.")
+        except:
+            pass
 
-@app.on_message(filters.command("status"))
+@app.on_message(filters.command("ping") & filters.private)
+async def ping_message(client: Client, message: Message):
+    """Simple ping test"""
+    try:
+        logger.info(f"🏓 PING from user {message.from_user.id}")
+        await message.reply_text("🏓 **Pong!** Bot is alive and responding!")
+        logger.info(f"✅ PONG sent to {message.from_user.id}")
+    except Exception as e:
+        logger.error(f"Error in ping: {e}")
+
+@app.on_message(filters.command("test") & filters.private)
+async def test_message(client: Client, message: Message):
+    """Test command with detailed info"""
+    try:
+        logger.info(f"🧪 TEST command from user {message.from_user.id}")
+        
+        response = (
+            f"🤖 **Bot Test Results:**\n\n"
+            f"✅ **Status:** Responding normally\n"
+            f"👤 **Your ID:** `{message.from_user.id}`\n"
+            f"👤 **Your Username:** @{message.from_user.username or 'None'}\n"
+            f"📱 **Sessions loaded:** {len(session_clients)}\n"
+            f"🔐 **SUDO status:** {'✅ Authorized' if message.from_user.id in cfg.SUDO else '❌ Not authorized'}\n"
+            f"🌐 **Platform:** Heroku\n"
+            f"⏰ **Current time:** {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"🆔 **Bot ID:** {(await app.get_me()).id}\n"
+            f"📊 **SUDO users:** {len(cfg.SUDO)}"
+        )
+        
+        await message.reply_text(response)
+        logger.info(f"✅ TEST response sent to {message.from_user.id}")
+        
+    except Exception as e:
+        logger.error(f"Error in test_message: {e}")
+        try:
+            await message.reply_text("❌ Test failed. Check logs.")
+        except:
+            pass
+
+@app.on_message(filters.command("status") & filters.private)
 async def status_message(client: Client, message: Message):
     """Handle /status command"""
     try:
+        logger.info(f"📊 STATUS command from user {message.from_user.id}")
+        
         if message.from_user.id not in cfg.SUDO:
             await message.reply_text("❌ Only sudo users can use this command.")
             return
@@ -119,40 +181,29 @@ async def status_message(client: Client, message: Message):
         active_reports_count = len(active_reports)
         
         status_text = (
-            f"🤖 **Bot Status**\n\n"
-            f"📱 **Active Sessions:** {active_sessions}\n"
-            f"📊 **Active Reports:** {active_reports_count}\n"
-            f"👥 **Total SUDO Users:** {len(cfg.SUDO)}\n\n"
-            f"✅ **Bot is running normally on Heroku**"
+            f"🤖 **Bot Status Report**\n\n"
+            f"📱 **Sessions loaded:** {active_sessions}\n"
+            f"📊 **Active reports:** {active_reports_count}\n"
+            f"👥 **SUDO users:** {len(cfg.SUDO)}\n"
+            f"💾 **Report data entries:** {len(report_data)}\n"
+            f"🕐 **Uptime:** Running normally\n\n"
+            f"✅ **All systems operational**"
         )
         await message.reply_text(status_text)
+        logger.info(f"✅ STATUS sent to {message.from_user.id}")
         
     except Exception as e:
         logger.error(f"Error in status_message: {e}")
-        await message.reply_text("❌ An error occurred while checking status.")
 
-@app.on_message(filters.command("test"))
-async def test_message(client: Client, message: Message):
-    """Test command to check if bot is responding"""
-    try:
-        await message.reply_text(
-            f"🤖 **Bot Test Results:**\n\n"
-            f"✅ Bot is responding\n"
-            f"👤 Your ID: `{message.from_user.id}`\n"
-            f"📱 Sessions loaded: {len(session_clients)}\n"
-            f"🔐 SUDO status: {'✅ Authorized' if message.from_user.id in cfg.SUDO else '❌ Not authorized'}\n"
-            f"🌐 Platform: Heroku\n"
-            f"⏰ Current time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-    except Exception as e:
-        logger.error(f"Error in test: {e}")
-
-@app.on_message(filters.command("report"))
+@app.on_message(filters.command("report") & filters.private)
 async def report_command(client, message: Message):
     """Handle /report command"""
     try:
+        logger.info(f"📝 REPORT command from user {message.from_user.id}")
+        
         if message.from_user.id not in cfg.SUDO:
             await message.reply_text("❌ Only sudo users can use this command.")
+            logger.info(f"User {message.from_user.id} not in SUDO list")
             return
 
         # Check if user already has an active report
@@ -173,15 +224,21 @@ async def report_command(client, message: Message):
             "• `-1001234567890` (for private groups with ID)"
         )
         report_data[message.from_user.id]["step"] = "username"
+        logger.info(f"Report flow started for user {message.from_user.id}")
         
     except Exception as e:
         logger.error(f"Error in report_command: {e}")
-        await message.reply_text("❌ An error occurred. Please try again.")
+        try:
+            await message.reply_text("❌ An error occurred. Please try again.")
+        except:
+            pass
 
-@app.on_message(filters.command("stopreport"))
+@app.on_message(filters.command("stopreport") & filters.private)
 async def stop_report_command(client, message: Message):
     """Handle /stopreport command"""
     try:
+        logger.info(f"🛑 STOPREPORT command from user {message.from_user.id}")
+        
         user_id = message.from_user.id
         if user_id not in active_reports:
             await message.reply_text("❌ You don't have any active reporting tasks.")
@@ -197,22 +254,26 @@ async def stop_report_command(client, message: Message):
             del report_data[user_id]
         
         await message.reply_text("✅ Reporting task cancelled successfully.")
-        await log_to_user(user_id, "🛑 Reporting task cancelled by user.")
+        logger.info(f"Report cancelled for user {user_id}")
         
     except Exception as e:
         logger.error(f"Error in stop_report_command: {e}")
-        await message.reply_text("❌ An error occurred while cancelling the task.")
 
 # ---------- Text Input Handler ----------
-@app.on_message(filters.text & ~filters.command(["report", "start", "stopreport", "status", "test"]))
+@app.on_message(filters.text & filters.private & ~filters.command(["report", "start", "stopreport", "status", "test", "ping"]))
 async def handle_text_reply(client: Client, message: Message):
     """Handle text input during reporting flow"""
     try:
         user_id = message.from_user.id
+        logger.info(f"💬 Text message from {user_id}: {message.text}")
+        
         if user_id not in report_data or "step" not in report_data[user_id]:
+            # Not in reporting flow, just acknowledge
+            await message.reply_text("👋 I received your message! Use /start to see available commands.")
             return
 
         step = report_data[user_id]["step"]
+        logger.info(f"User {user_id} in step: {step}")
 
         # Step: username
         if step == "username":
@@ -235,6 +296,7 @@ async def handle_text_reply(client: Client, message: Message):
                 "Recommended: 1-5 (to avoid rate limits)\n"
                 "Maximum: 20"
             )
+            logger.info(f"User {user_id} set target: {target}")
             return
 
         # Step: count
@@ -244,7 +306,7 @@ async def handle_text_reply(client: Client, message: Message):
                 if count <= 0:
                     await message.reply_text("❌ Number must be positive. Please enter a valid number.")
                     return
-                if count > 20:  # Reasonable limit
+                if count > 20:
                     await message.reply_text("⚠️ Maximum 20 reports per session. Setting to 20.")
                     count = 20
                     
@@ -263,6 +325,7 @@ async def handle_text_reply(client: Client, message: Message):
                     "⚠️ **Select report reason:**", 
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
+                logger.info(f"User {user_id} set count: {count}")
                 
             except ValueError:
                 await message.reply_text("❌ Invalid number. Please send a valid integer.")
@@ -280,7 +343,7 @@ async def handle_text_reply(client: Client, message: Message):
                 
             report_data[user_id]["description"] = description
             
-            # Show summary before starting
+            # Show summary
             data = report_data[user_id]
             summary = (
                 f"📋 **Report Summary:**\n\n"
@@ -291,15 +354,19 @@ async def handle_text_reply(client: Client, message: Message):
                 f"🚀 Starting mass reporting..."
             )
             await message.reply_text(summary)
+            logger.info(f"Starting report for user {user_id}")
             
-            # Create a task for reporting to avoid blocking
+            # Create reporting task
             task = asyncio.create_task(start_reporting(user_id, message))
             active_reports[user_id] = task
             return
             
     except Exception as e:
         logger.error(f"Error in handle_text_reply: {e}")
-        await message.reply_text("❌ An error occurred. Please try again.")
+        try:
+            await message.reply_text("❌ An error occurred processing your message.")
+        except:
+            pass
 
 # ---------- Callback Query Handler ----------
 @app.on_callback_query(filters.regex(r"^reason_"))
@@ -307,6 +374,8 @@ async def handle_reason_callback(client: Client, cq: CallbackQuery):
     """Handle reason selection callback"""
     try:
         user_id = cq.from_user.id
+        logger.info(f"🔘 Callback from {user_id}: {cq.data}")
+        
         if user_id not in report_data:
             await cq.answer("❌ No active report session.", show_alert=True)
             return
@@ -330,159 +399,31 @@ async def handle_reason_callback(client: Client, cq: CallbackQuery):
             f"Provide details about why you're reporting this target."
         )
         await cq.answer()
+        logger.info(f"User {user_id} selected reason: {reason}")
         
     except Exception as e:
         logger.error(f"Error in handle_reason_callback: {e}")
         await cq.answer("❌ An error occurred.", show_alert=True)
 
-# ---------- Main Reporting Function ----------
+# Simplified reporting function for testing
 async def start_reporting(user_id: int, message: Message):
-    """Main reporting function with comprehensive error handling"""
+    """Simplified reporting function"""
     try:
+        logger.info(f"🚨 Starting report for user {user_id}")
         data = report_data.get(user_id)
+        
         if not data:
             await log_to_user(user_id, "❌ Report data not found.")
             return
 
-        target = data["username"]
-        reason = data["reason"]
-        count = data["count"]
-        description = data["description"]
-
-        reason_map = {
-            "spam": types.InputReportReasonSpam(),
-            "child": types.InputReportReasonChildAbuse(),
-            "violence": types.InputReportReasonViolence(),
-            "porn": types.InputReportReasonPornography(),
-            "copyright": types.InputReportReasonCopyright(),
-            "other": types.InputReportReasonOther()
-        }
-        reason_obj = reason_map.get(reason, types.InputReportReasonSpam())
-
-        await log_to_user(user_id,
-            f"🚨 **Mass report started**\n"
-            f"🎯 **Target:** {target}\n"
-            f"⚠️ **Reason:** {reason}\n"
-            f"🔢 **Reports per session:** {count}\n"
-            f"📱 **Total sessions:** {len(session_clients)}"
-        )
-
-        successful_reports = 0
-        failed_sessions = 0
-        session_results = {}
+        await log_to_user(user_id, f"🚨 Report simulation started for: {data['username']}")
+        await asyncio.sleep(2)
+        await log_to_user(user_id, "✅ Report simulation completed!")
         
-        for session_key, sc in session_clients.items():
-            try:
-                # Check if task was cancelled
-                if user_id not in active_reports:
-                    await log_to_user(user_id, "🛑 Reporting cancelled by user.")
-                    break
-                
-                session_reports = 0
-                session_results[session_key] = {"status": "processing", "reports": 0, "error": None}
-                
-                # Try to start the session if not already started
-                if not sc.is_connected:
-                    await sc.start()
-                    await asyncio.sleep(2)
-                
-                # Validate target exists
-                try:
-                    chat = await sc.get_chat(target)
-                    peer = await sc.resolve_peer(chat.id)
-                    await log_to_user(user_id, f"✅ {session_key}: Target validated - {chat.title or chat.first_name or target}")
-                except (PeerIdInvalid, UsernameInvalid, UsernameNotOccupied) as e:
-                    session_results[session_key] = {"status": "failed", "reports": 0, "error": "Invalid target"}
-                    await log_to_user(user_id, f"❌ {session_key}: Invalid target {target}")
-                    failed_sessions += 1
-                    continue
-                except Exception as e:
-                    session_results[session_key] = {"status": "failed", "reports": 0, "error": str(e)}
-                    await log_to_user(user_id, f"❌ {session_key}: Failed to resolve {target}: {e}")
-                    failed_sessions += 1
-                    continue
-
-                # Send reports for this session
-                for i in range(count):
-                    try:
-                        # Check if task was cancelled
-                        if user_id not in active_reports:
-                            break
-                            
-                        await sc.invoke(functions.account.ReportPeer(
-                            peer=peer,
-                            reason=reason_obj,
-                            message=description
-                        ))
-                        
-                        session_reports += 1
-                        successful_reports += 1
-                        session_results[session_key]["reports"] = session_reports
-                        
-                        # Log progress for every report
-                        await log_to_user(user_id, f"📤 {session_key}: Report {i+1}/{count} sent")
-                        
-                        # Random delay between reports (10-30 seconds)
-                        delay = random.uniform(10, 30)
-                        await asyncio.sleep(delay)
-                        
-                    except FloodWait as e:
-                        await log_to_user(user_id, f"⏳ {session_key}: Rate limited for {e.value} seconds")
-                        await asyncio.sleep(e.value + 2)
-                        # Retry the report
-                        try:
-                            await sc.invoke(functions.account.ReportPeer(
-                                peer=peer,
-                                reason=reason_obj,
-                                message=description
-                            ))
-                            session_reports += 1
-                            successful_reports += 1
-                            session_results[session_key]["reports"] = session_reports
-                        except Exception as retry_e:
-                            await log_to_user(user_id, f"❌ {session_key}: Retry failed: {retry_e}")
-                            
-                    except Exception as e:
-                        await log_to_user(user_id, f"❌ {session_key}: Report {i+1} failed: {e}")
-                        await asyncio.sleep(5)
-
-                session_results[session_key]["status"] = "completed"
-                
-                # Delay between sessions (30-60 seconds)
-                session_delay = random.uniform(30, 60)
-                await log_to_user(user_id, f"⏸️ Waiting {session_delay:.1f}s before next session...")
-                await asyncio.sleep(session_delay)
-
-            except Exception as e:
-                session_results[session_key] = {"status": "error", "reports": session_reports, "error": str(e)}
-                await log_to_user(user_id, f"❌ {session_key}: Unexpected error: {e}")
-                failed_sessions += 1
-
-        # Generate final report
-        total_expected = len(session_clients) * count
-        success_rate = (successful_reports / total_expected * 100) if total_expected > 0 else 0
+        logger.info(f"Report completed for user {user_id}")
         
-        final_report = (
-            f"🏁 **Mass report completed for** `{target}`\n\n"
-            f"📊 **Results:**\n"
-            f"✅ **Successful reports:** {successful_reports}/{total_expected} ({success_rate:.1f}%)\n"
-            f"❌ **Failed sessions:** {failed_sessions}/{len(session_clients)}\n"
-            f"⏱️ **Duration:** {time.time() - data['started_at']:.1f} seconds\n\n"
-            f"📋 **Session Summary:**\n"
-        )
-        
-        # Add session details
-        for session_key, result in session_results.items():
-            status_emoji = {"completed": "✅", "failed": "❌", "error": "⚠️", "processing": "🔄"}
-            emoji = status_emoji.get(result["status"], "❓")
-            final_report += f"{emoji} {session_key}: {result['reports']} reports\n"
-
-        await log_to_user(user_id, final_report)
-
     except Exception as e:
         logger.error(f"Error in start_reporting: {e}")
-        await log_to_user(user_id, f"❌ Critical error in reporting process: {e}")
-    
     finally:
         # Clean up
         if user_id in active_reports:
@@ -493,103 +434,67 @@ async def start_reporting(user_id: int, message: Message):
 # ---------- Session Management ----------
 async def start_limited_sessions():
     """Start limited sessions for Heroku"""
-    logger.info("Starting limited session clients for Heroku...")
+    logger.info("Starting limited session clients...")
     
     started_count = 0
-    max_sessions = 5  # Limit sessions for Heroku memory
+    max_sessions = 3  # Even more limited for testing
     
     for session_key, client in list(session_clients.items())[:max_sessions]:
         try:
             await client.start()
             started_count += 1
-            logger.info(f"✅ {session_key} started successfully")
-        except SessionPasswordNeeded:
-            logger.error(f"❌ {session_key}: 2FA password required")
+            logger.info(f"✅ {session_key} started")
         except Exception as e:
             logger.error(f"❌ Failed to start {session_key}: {e}")
     
-    logger.info(f"Started {started_count}/{max_sessions} sessions")
     return started_count
-
-async def stop_all_sessions():
-    """Stop all session clients"""
-    logger.info("Stopping session clients...")
-    
-    for session_key, client in session_clients.items():
-        try:
-            if client.is_connected:
-                await client.stop()
-            logger.info(f"✅ {session_key} stopped successfully")
-        except Exception as e:
-            logger.error(f"❌ Failed to stop {session_key}: {e}")
-
-# ---------- Heroku Startup Function ----------
-async def heroku_startup():
-    """Startup function optimized for Heroku"""
-    try:
-        logger.info("🚀 Starting Heroku bot...")
-        
-        # Initialize sessions
-        await initialize_sessions()
-        logger.info(f"📱 Initialized {len(session_clients)} sessions")
-        
-        # Start limited sessions for Heroku
-        started_sessions = await start_limited_sessions()
-        
-        logger.info(f"✅ Heroku bot ready! Sessions: {started_sessions}")
-        
-        # Send startup notification to first SUDO user
-        if cfg.SUDO:
-            try:
-                await app.send_message(
-                    cfg.SUDO[0], 
-                    f"🟢 **Bot Started on Heroku**\n\n"
-                    f"📱 Sessions: {started_sessions}\n"
-                    f"⏰ Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                    f"🆔 Bot ID: {(await app.get_me()).id}"
-                )
-            except Exception as e:
-                logger.error(f"Failed to send startup notification: {e}")
-                
-    except Exception as e:
-        logger.error(f"Heroku startup error: {e}")
 
 # ---------- Entry Point ----------
 if __name__ == "__main__":
     async def main():
         try:
-            # Heroku-specific startup
-            logger.info("Starting bot for Heroku deployment...")
+            logger.info("🚀 Starting debug bot for Heroku...")
             
-            # Start the app first
+            # Start the app
             await app.start()
-            
-            # Run startup tasks
-            await heroku_startup()
             
             # Get bot info
             me = await app.get_me()
-            logger.info(f"✅ Bot @{me.username} is running on Heroku!")
-            print(f"Bot started: @{me.username}")
+            logger.info(f"✅ Bot @{me.username} (ID: {me.id}) started!")
+            print(f"✅ Bot @{me.username} is running!")
             
-            # Keep running forever
+            # Initialize sessions (optional)
+            await initialize_sessions()
+            started = await start_limited_sessions()
+            logger.info(f"📱 Started {started} sessions")
+            
+            # Send test message to first SUDO user
+            if cfg.SUDO:
+                try:
+                    await app.send_message(
+                        cfg.SUDO[0], 
+                        f"🟢 **Debug Bot Started!**\n\n"
+                        f"🤖 Bot: @{me.username}\n"
+                        f"📱 Sessions: {started}\n"
+                        f"🆔 Your ID: {cfg.SUDO[0]}\n\n"
+                        f"Try these commands:\n"
+                        f"• /start\n• /ping\n• /test"
+                    )
+                    logger.info("✅ Startup message sent to SUDO user")
+                except Exception as e:
+                    logger.error(f"Failed to send startup message: {e}")
+            
+            # Keep running
             await asyncio.Event().wait()
             
-        except KeyboardInterrupt:
-            logger.info("Bot stopped by user")
-            await stop_all_sessions()
-            await app.stop()
         except Exception as e:
             logger.error(f"Fatal error: {e}")
-            print(f"Error: {e}")
-            await stop_all_sessions()
-            await app.stop()
+            print(f"Fatal error: {e}")
     
-    # Run the main function
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Shutting down...")
+        logger.info("Bot stopped")
     except Exception as e:
         logger.error(f"Critical error: {e}")
         print(f"Critical error: {e}")
