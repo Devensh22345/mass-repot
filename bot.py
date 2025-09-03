@@ -556,27 +556,40 @@ async def heroku_startup():
 
 # ---------- Entry Point ----------
 if __name__ == "__main__":
+    async def main():
+        try:
+            # Heroku-specific startup
+            logger.info("Starting bot for Heroku deployment...")
+            
+            # Start the app first
+            await app.start()
+            
+            # Run startup tasks
+            await heroku_startup()
+            
+            # Get bot info
+            me = await app.get_me()
+            logger.info(f"✅ Bot @{me.username} is running on Heroku!")
+            print(f"Bot started: @{me.username}")
+            
+            # Keep running forever
+            await asyncio.Event().wait()
+            
+        except KeyboardInterrupt:
+            logger.info("Bot stopped by user")
+            await stop_all_sessions()
+            await app.stop()
+        except Exception as e:
+            logger.error(f"Fatal error: {e}")
+            print(f"Error: {e}")
+            await stop_all_sessions()
+            await app.stop()
+    
+    # Run the main function
     try:
-        # Heroku-specific startup
-        logger.info("Starting bot for Heroku deployment...")
-        
-        # Start the app first
-        app.start()
-        
-        # Run startup tasks
-        asyncio.get_event_loop().run_until_complete(heroku_startup())
-        
-        # Get bot info
-        me = asyncio.get_event_loop().run_until_complete(app.get_me())
-        logger.info(f"✅ Bot @{me.username} is running on Heroku!")
-        print(f"Bot started: @{me.username}")
-        
-        # Keep running (Heroku style)
-        app.run()
-        
+        asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-        asyncio.get_event_loop().run_until_complete(stop_all_sessions())
+        logger.info("Shutting down...")
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        print(f"Error: {e}")
+        logger.error(f"Critical error: {e}")
+        print(f"Critical error: {e}")
