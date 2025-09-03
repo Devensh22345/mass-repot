@@ -10,8 +10,6 @@ class Config:
     
     # SUDO Users (list of user IDs who can use the bot)
     SUDO = [
-        6872968794,
-        7809979684,
         1702061654,  # Replace with your Telegram user ID
         # 987654321,  # Add more SUDO users as needed
     ]
