@@ -6,7 +6,7 @@ class Config:
     API_HASH = "5c0ad7c48a86afac87630ba28b42560d"  # Your API Hash (string)
     
     # Bot Token (get from @BotFather)
-    BOT_TOKEN = "7567832185:AAErNpedjqTPpYJ_NjFEOb42EFJyfSeKjpw"
+    BOT_TOKEN = "6298494198:AAHgX8S02VMWFqhxeYlhFocb5Ch8qoIDmic"
     
     # SUDO Users (list of user IDs who can use the bot)
     SUDO = [
