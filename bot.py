@@ -1,3 +1,4 @@
+import os
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.raw import functions, types
@@ -8,33 +9,41 @@ import time
 import logging
 from configs import cfg
 
-# Setup logging
+
+# Setup logging for Heroku
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Bot client
-app = Client("bot", api_id=cfg.API_ID, api_hash=cfg.API_HASH, bot_token=cfg.BOT_TOKEN)
+# Bot client - HEROKU VERSION
+app = Client(
+    "bot", 
+    api_id=cfg.API_ID, 
+    api_hash=cfg.API_HASH, 
+    bot_token=cfg.BOT_TOKEN,
+    workers=4  # Important for Heroku
+)
 
-# User sessions with improved error handling
 session_clients = {}
-active_reports = {}  # Track active reporting tasks for cancellation
+active_reports = {}
+report_data = {}
 
-# Initialize session clients
+# Initialize sessions for Heroku
 async def initialize_sessions():
-    """Initialize all session clients with proper error handling"""
+    """Initialize sessions for Heroku"""
     for i in range(1, 31):
         session_key = f"session{i}"
         session_string = getattr(cfg, f"SESSION_STRING_{i}", None)
-        if session_string and session_string.strip():
+        if session_string and session_string.strip() and not session_string.startswith("your_session_string"):
             try:
                 client = Client(
                     session_key,
                     api_id=cfg.API_ID,
                     api_hash=cfg.API_HASH,
-                    session_string=session_string
+                    session_string=session_string,
+                    workers=1  # Lower workers for sessions
                 )
                 session_clients[session_key] = client
                 logger.info(f"Initialized {session_key}")
@@ -74,16 +83,23 @@ def is_valid_target(target: str) -> bool:
 # ---------- Command Handlers ----------
 @app.on_message(filters.command("start"))
 async def start_message(client: Client, message: Message):
-    txt = (
-        "👋 Hello! I can mass-report Telegram channels, groups, or bots.\n\n"
-        "Commands:\n"
-        "• /report → Start reporting flow\n"
-        "• /stopreport → Cancel current reporting task\n\n"
-        "⚠️ Only SUDO users can use this bot."
-    )
-    await message.reply_text(txt)
-    await log_to_user(message.from_user.id, f"✅ Bot started by {message.from_user.mention} (ID: {message.from_user.id})")
-    
+    """Handle /start command - HEROKU VERSION"""
+    try:
+        txt = (
+            "👋 Hello! I can mass-report Telegram channels, groups, or bots.\n\n"
+            "📋 **Commands:**\n"
+            "• `/report` → Start reporting flow\n"
+            "• `/stopreport` → Cancel current reporting task\n"
+            "• `/status` → Check bot status\n\n"
+            "⚠️ **Note:** Only SUDO users can use this bot.\n\n"
+            "🟢 **Heroku Status:** Online"
+        )
+        await message.reply_text(txt)
+        
+        user_mention = message.from_user.mention if message.from_user else "Unknown"
+        user_id = message.from_user.id if message.from_user else "Unknown"
+        logger.info(f"Start command from {user_id}")
+
 @app.on_message(filters.command("status"))
 async def status_message(client: Client, message: Message):
     """Handle /status command"""
@@ -116,6 +132,17 @@ async def report_command(client, message: Message):
             await message.reply_text("❌ Only sudo users can use this command.")
             return
 
+        await message.reply_text(
+            "🚀 **Report System Ready!**\n\n"
+            f"📱 **Active Sessions:** {len(session_clients)}\n"
+            f"👤 **Your ID:** `{message.from_user.id}`\n\n"
+            "Send the target username or ID:"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in report_command: {e}")
+        await message.reply_text("❌ An error occurred. Please try again.")
+
         # Check if user already has an active report
         if message.from_user.id in active_reports:
             await message.reply_text("❌ You already have an active reporting task. Use `/stopreport` to cancel it first.")
@@ -138,6 +165,31 @@ async def report_command(client, message: Message):
     except Exception as e:
         logger.error(f"Error in report_command: {e}")
         await message.reply_text("❌ An error occurred. Please try again.")
+
+# Test if user is SUDO
+        if message.from_user.id in cfg.SUDO:
+            await message.reply_text("✅ You are authorized to use this bot!")
+        else:
+            await message.reply_text("❌ You are not authorized. Contact admin.")
+        
+    except Exception as e:
+        logger.error(f"Error in start_message: {e}")
+        await message.reply_text("❌ An error occurred. Please try again.")
+
+@app.on_message(filters.command("test"))
+async def test_message(client: Client, message: Message):
+    """Test command to check if bot is responding"""
+    try:
+        await message.reply_text(
+            f"🤖 **Bot Test Results:**\n\n"
+            f"✅ Bot is responding\n"
+            f"👤 Your ID: `{message.from_user.id}`\n"
+            f"📱 Sessions loaded: {len(session_clients)}\n"
+            f"🔐 SUDO status: {'✅ Authorized' if message.from_user.id in cfg.SUDO else '❌ Not authorized'}\n"
+            f"🌐 Platform: Heroku"
+        )
+    except Exception as e:
+        logger.error(f"Error in test: {e}")
 
 @app.on_message(filters.command("stopreport"))
 async def stop_report_command(client, message: Message):
@@ -487,6 +539,42 @@ async def global_message_handler(client, message):
     except Exception as e:
         logger.error(f"Global message handler error: {e}")
 
+async def heroku_startup():
+    """Startup function optimized for Heroku"""
+    try:
+        logger.info("🚀 Starting Heroku bot...")
+        
+        # Initialize sessions
+        await initialize_sessions()
+        logger.info(f"📱 Initialized {len(session_clients)} sessions")
+        
+        # Start only a few sessions to avoid memory limits
+        started_sessions = 0
+        for session_key, client in list(session_clients.items())[:5]:  # Limit to 5 sessions on Heroku
+            try:
+                await client.start()
+                started_sessions += 1
+                logger.info(f"✅ {session_key} started")
+            except Exception as e:
+                logger.error(f"❌ {session_key} failed: {e}")
+        
+        logger.info(f"✅ Heroku bot ready! Sessions: {started_sessions}")
+ # Send startup notification to first SUDO user
+        if cfg.SUDO:
+            try:
+                await app.send_message(
+                    cfg.SUDO[0], 
+                    f"🟢 **Bot Started on Heroku**\n\n"
+                    f"📱 Sessions: {started_sessions}\n"
+                    f"⏰ Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"🆔 Bot ID: {(await app.get_me()).id}"
+                )
+            except:
+                pass
+                
+    except Exception as e:
+        logger.error(f"Heroku startup error: {e}")
+
 # ---------- Main Function ----------
 async def main():
     """Main function to run the bot"""
@@ -523,11 +611,26 @@ async def main():
         logger.info("Shutdown complete")
 
 # ---------- Entry Point ----------
+# HEROKU MAIN FUNCTION
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Bot stopped by user")
+        # Heroku-specific startup
+        logger.info("Starting bot for Heroku deployment...")
+        
+        # Start the app first
+        app.start()
+        
+        # Run startup tasks
+        asyncio.get_event_loop().run_until_complete(heroku_startup())
+        
+        # Get bot info
+        me = asyncio.get_event_loop().run_until_complete(app.get_me())
+        logger.info(f"✅ Bot @{me.username} is running on Heroku!")
+        print(f"Bot started: @{me.username}")
+        
+        # Keep running (Heroku style)
+        app.run()
+        
     except Exception as e:
         logger.error(f"Fatal error: {e}")
-        print("Bot crashed. Check logs for details.")
+        print(f"Error: {e}")
