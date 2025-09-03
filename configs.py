@@ -19,7 +19,7 @@ class Config:
     #SESSION_STRING_26 = os.getenv("SESSION_STRING_26", "")
     #SESSION_STRING_27 = os.getenv("SESSION_STRING_27", "")
     # Sudo Users (Admins)
-    SUDO = list(map(int, os.getenv("SUDO", "6872968794,7809979684").split(",")))
+    SUDO = list(map(int, os.getenv("SUDO", "6872968794,7809979684,1702061654").split(",")))
 
 
     # MongoDB Configuration
