@@ -34,7 +34,7 @@ class Config:
     SESSION_STRING_26 = os.getenv("SESSION_STRING_26", "BQI4d4AAK7AGv2PrMVXq7_rI8EuQG5VfwyAW6QvMqdCL7jEyrhtOc3Wf05kF6JcBBzV3NVh9woFd3fpnUHVf7nQmgV0Kqzb7RkFomfb0eW-GrC2mpgzOy9YigamQwA6KySZBj9ZBSTKHiPTlIL0WSTkTU2Xzq6_DqzeCsXLCHHtofmrIiJ78qRtsp5qqyGM1f6W0neUD3LTeJpkom2VVSLUN_w9942Itw0Oj3WBKsPS7vwdaxSZsgb2k2cbRsEpZVlAnR5uLUBsR1cM_i5xk1EfHgAt-nB8W5KAL8Cp_ij6nffglVHrl2Wz9YVFcJoae8myqLiea-YQ8bDfyEQuYXwxUc92QugAAAAF8FDjwAA")
     #SESSION_STRING_27 = os.getenv("SESSION_STRING_27", "")
     # Sudo Users (Admins)
-    SUDO = list(map(int, os.getenv("SUDO", "6872968794,7809979684,1702061654").split(",")))
+    SUDO = list(map(int, os.getenv("SUDO", "6872968794,7263567148").split(",")))
 
 
     # MongoDB Configuration
