@@ -167,7 +167,12 @@ async def start_reporting(user_id, message: Message):
 
 
 # ---------- Start all session clients ----------
-for client in session_clients.values():
-    client.start()
+for key, client in session_clients.items():
+    try:
+        client.start()
+        print(f"[OK] {key} started successfully")
+    except Exception as e:
+        print(f"[CORRUPT] {key} failed to start → {e}")
+
 
 app.run()
